@@ -2,8 +2,9 @@
 import pprint
 from configlib import getConfig, OptionParser
 import json
-from urllib2 import Request, urlopen
+import requests
 import netaddr
+import sys
 
 intel = ''
 
@@ -29,26 +30,36 @@ class iqr():
             self.request = Request("https://"+self.config.apiurl+"/domains/"+self.intel+"/"+reqtype)
         self.request.add_header("Authorization", self.config.apikey)
 
-    def sendRequest(self):
-        try:
-            self.result = urlopen(self.request)
-        except (URLError, HTTPError) as e:
-            sys.stderr.write('Error when sending HTTP request: '.format(e))
-        try:
-            self.rawdata = json.load(self.result)
-        except ValueError as e:
-            sys.stderr.write('Error when parsing reveived JSON data: '.format(e))
+    def sendRequest(self, reqtype):
+        headers = {'Authorization': self.config.apikey}
+        url = ''
+        self.rawdata = dict()
+        if netaddr.valid_ipv4(self.intel):
+            url = "https://" + self.config.apiurl + "/ips/" + self.intel + "/" + reqtype
+        else:
+            url = "https://" + self.config.apiurl + "/domains/" + self.intel + "/" + reqtype
+        if len(reqtype) and len(url) > 1:
+            try:
+                request = requests.get(url=url, headers=headers, timeout=0.5)
+            except (
+                    requests.exceptions.ConnectionError, requests.exceptions.TooManyRedirects,
+                    requests.exceptions.Timeout) as e:
+                sys.stderr.write('Failed to fetch IQRisk data: {0}\n'.format(e))
+            if 'request' in locals() and hasattr(request, 'json'):
+                if request.status_code == 200:
+                    try:
+                        self.rawdata = request.json()
+                    except (ValueError) as e:
+                        sys.stderr.write('Failed to decode IQRisk data: {0}\n'.format(e))
 
-    def ip_reputation(self, type):
-        if type in self.config.allowedipreptypes:
-            self.prepareRequest(type)
-            self.sendRequest()
-            if self.rawdata['response']:
+    def get_reputation(self, type, objtype):
+        self.reputation[type] = dict()
+        if objtype == 'ip':
+            if type in self.config.allowedipreptypes:
+                self.sendRequest(type)
+        if objtype == 'domain':
+            self.sendRequest(type)
+        if 'response' in self.rawdata:
+            if self.rawdata['response'] and self.rawdata['success']:
                 self.reputation[type] = self.rawdata['response']
 
-    def domain_reputation(self, type):
-        if type in self.config.alloweddomainreptypes:
-            self.prepareRequest(type)
-            self.sendRequest()
-            if self.rawdata['response']:
-                self.reputation[type] = self.rawdata['response']
